@@ -23,52 +23,82 @@ def split_event(message: str):
         message (str): JSON形式のログメッセージ
 
     Returns:
-        tuple: (入力JSON, 出力JSON, メタデータ辞書)
+        tuple: (入力JSON, 入力S3パス, 出力JSON, メタデータ辞書, エラーコード)
     """
+
+    input_body_json = None
+    input_body_s3_path = None
+    output_body_json = None
+    metadata = {}
+    errorCode = None
+
     event = json.loads(message)
 
-    input_body_json = event["input"]["inputBodyJson"]
-    output_body_json = event["output"]["outputBodyJson"]
+    if "input" in event:
+        if "inputBodyJson" in event["input"]:
+            input_body_json = event["input"]["inputBodyJson"]
+        elif "inputBodyS3Path" in event["input"]:
+            input_body_s3_path = event["input"]["inputBodyS3Path"]
+
+    if "output" in event:
+        if "outputBodyJson" in event["output"]:
+            output_body_json = event["output"]["outputBodyJson"]
 
     # メタデータを抽出
-    metadata = {}
     metadata["timestamp"] = event["timestamp"]
     metadata["modelId"] = event["modelId"]
     metadata["operation"] = event["operation"]
 
-    metadata["stopReason"] = output_body_json["stopReason"]
-    metadata["usage"] = output_body_json["usage"]
-    metadata["latencyMs"] = output_body_json["metrics"]["latencyMs"]
+    if output_body_json:
+        metadata["stopReason"] = output_body_json["stopReason"]
+        metadata["usage"] = output_body_json["usage"]
+        metadata["latencyMs"] = output_body_json["metrics"]["latencyMs"]
+    else:
+        # 値がないと困るので、ごまかす
+        metadata["usage"] = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
+        metadata["latencyMs"] = 0
 
-    # オプショナルな設定情報の抽出
-    if "inferenceConfig" in input_body_json:
-        metadata["inferenceConfig"] = input_body_json["inferenceConfig"]
+    if input_body_json:
+        if "inferenceConfig" in input_body_json:
+            metadata["inferenceConfig"] = input_body_json["inferenceConfig"]
 
-    if "additionalModelRequestFields" in input_body_json:
-        metadata["additionalModelRequestFields"] = input_body_json[
-            "additionalModelRequestFields"
-        ]
+        if "additionalModelRequestFields" in input_body_json:
+            metadata["additionalModelRequestFields"] = input_body_json[
+                "additionalModelRequestFields"
+            ]
 
-    return input_body_json, output_body_json, metadata
+    if "errorCode" in event:
+        errorCode = event["errorCode"]
+
+    return input_body_json, input_body_s3_path, output_body_json, metadata, errorCode
 
 
-def write_tag(metadata: dict):
+def write_tag(metadata: dict, errorCode: str = None):
     """
     タグを表示
 
     Args:
         metadata (dict): メタデータを含む辞書
     """
-    tagger_component(
-        "",
-        [
-            f"🤖 {metadata['modelId']}",
-            f"⌛️ {metadata['latencyMs']/1000} s",
-            f"✏️ {metadata['usage']['totalTokens']}",
-            f"✏️ {metadata['operation']}",
-        ],
-        ["BLUE", "GREEN", "ORANGE", "GRAY"],
-    )
+
+    tags = [
+        f"🤖 {metadata['modelId']}",
+        f"⌛️ {metadata['latencyMs']/1000} s",
+        f"✏️ {metadata['usage']['totalTokens']}",
+        f"✏️ {metadata['operation']}",
+    ]
+    color_name = [
+        "BLUE",
+        "GREEN",
+        "ORANGE",
+        "GRAY",
+    ]
+
+    if errorCode:
+        tags.append("‼️ ERROR")
+        color_name.append("RED")
+
+    tagger_component("", tags, color_name)
 
 
 def write_system(body: dict):
@@ -193,23 +223,50 @@ if "events" in st.session_state:
 
     with st.sidebar:
         for event in events:
-            input_body_json, output_body_json, metadata = split_event(event["message"])
+            _, _, _, metadata, errorCode = split_event(event["message"])
 
             with st.container(border=True):
                 # イベントの概要をタグとして表示
-                write_tag(metadata)
+                write_tag(metadata, errorCode)
                 st.write(metadata["timestamp"])
 
                 # イベントの詳細表示用ボタン
                 def show_click(event):
                     st.session_state.event = event
 
-                st.button(
-                    "Show",
-                    key=event["eventId"],
-                    on_click=show_click,
-                    kwargs={"event": event},
-                )
+                # イベントのJSON表示用ボタン
+                @st.dialog("event", width="large")
+                def show_message_json(event):
+                    st.json(event["message"])
+
+                if errorCode:
+                    st.warning(errorCode)
+
+                    st.button(
+                        "JSON表示",
+                        key=f"log-{event['eventId']}",
+                        on_click=show_message_json,
+                        kwargs={"event": event},
+                    )
+
+                else:
+
+                    show_btn, log_btn = st.columns(2)
+
+                    with show_btn:
+                        st.button(
+                            "Show",
+                            key=f"show-{event['eventId']}",
+                            on_click=show_click,
+                            kwargs={"event": event},
+                        )
+                    with log_btn:
+                        st.button(
+                            "JSON表示",
+                            key=f"log-{event['eventId']}",
+                            on_click=show_message_json,
+                            kwargs={"event": event},
+                        )
 
     # 初期表示として最新のイベントを選択
     if "event" not in st.session_state and len(events) > 0:
@@ -218,10 +275,12 @@ if "events" in st.session_state:
 ## メインエリアにイベントの詳細を表示
 if "event" in st.session_state:
     event = st.session_state.event
-    input_body_json, output_body_json, metadata = split_event(event["message"])
+    input_body_json, input_body_s3_path, output_body_json, metadata, errorCode = (
+        split_event(event["message"])
+    )
 
     # イベントの概要をタグとして表示
-    write_tag(metadata)
+    write_tag(metadata, errorCode)
 
     # 3カラムレイアウトで詳細情報を表示
     c1, c2, c3 = st.columns(3)
@@ -229,21 +288,35 @@ if "event" in st.session_state:
     # 入力情報の表示
     with c1:
         st.subheader("Input", divider=True)
-        t1, t2 = st.tabs(["Text", "Raw"])
-        with t1:
-            write_system(input_body_json)
-            write_input_message(input_body_json)
-        with t2:
-            st.write(input_body_json)
+
+        if input_body_json:
+            t1, t2 = st.tabs(["Text", "Raw"])
+            with t1:
+                write_system(input_body_json)
+                write_input_message(input_body_json)
+            with t2:
+                st.write(input_body_json)
+        elif input_body_s3_path:
+            with st.container(border=True):
+                st.caption("S3を確認してください。")
+                st.text(input_body_s3_path)
+        else:
+            with st.container(border=True):
+                st.caption("ログにInput情報が含まれていないようです。")
 
     # 出力情報の表示
     with c2:
         st.subheader("Output", divider=True)
-        t1, t2 = st.tabs(["Text", "Raw"])
-        with t1:
-            write_output_message(output_body_json)
-        with t2:
-            st.write(output_body_json)
+
+        if output_body_json:
+            t1, t2 = st.tabs(["Text", "Raw"])
+            with t1:
+                write_output_message(output_body_json)
+            with t2:
+                st.write(output_body_json)
+        else:
+            with st.container(border=True):
+                st.caption("ログにOutput情報が含まれていないようです。")
 
     # メタデータの表示
     with c3:
