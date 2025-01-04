@@ -1,3 +1,5 @@
+# BedrockSmith
+
 CloudWatch Logsに出力したBedrockの呼び出しログを整形して表示します
 
 ![](docs/image.png)
