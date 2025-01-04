@@ -329,7 +329,7 @@ if "event" in st.session_state:
                     for kk, vv in v.items():
                         st.caption(kk)
                         st.text(vv)
-            if type(v) == str:
+            if type(v) in [str, int, float]:
                 with st.container(border=True):
                     st.caption(k)
                     st.text(v)
