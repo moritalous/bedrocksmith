@@ -171,9 +171,7 @@ time_range = {
 with st.sidebar:
     with st.expander("設定", expanded=True):
         # ログ取得のパラメータ設定
-        log_group_name = st.text_input(
-            "ロググループ名", value="bedrock-invoke-logging-us-east-1"
-        )
+        log_group_name = st.text_input("ロググループ名", value=default_log_group_name)
         region_name = st.text_input("リージョン名", value=default_region_name)
         select_range = st.selectbox("取得期間", time_range.keys(), index=3)
         limit = st.slider("取得件数", min_value=1, max_value=1000, value=100, step=10)
